@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	_ "net/http/pprof" // registers /debug/pprof handlers on http.DefaultServeMux
+
+	"concordia/gateway/ws"
 )
 
 func getenv(key, fallback string) string {
@@ -20,7 +24,13 @@ func main() {
 	certFile := getenv("TLS_CERT", "")
 	keyFile  := getenv("TLS_KEY", "")
 
-	handler := buildMux(configFromEnv())
+	cfg := configFromEnv()
+
+	hub := ws.NewHub()
+	brokers := strings.Split(cfg.KafkaBrokers, ",")
+	go ws.StartConsumer(context.Background(), brokers, hub)
+
+	handler := buildMux(cfg, hub)
 
 	if certFile != "" && keyFile != "" {
 		log.Printf("gateway starting on :%s (HTTP) and :%s (HTTPS/TLS)", port, tlsPort)

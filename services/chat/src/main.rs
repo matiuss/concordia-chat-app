@@ -1,10 +1,15 @@
-use std::{env, net::SocketAddr, sync::Arc, time::Duration};
+use std::{collections::HashMap, env, net::SocketAddr, sync::Arc, time::Duration};
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Multipart, Path, Query, State},
     http::{HeaderMap, StatusCode},
     routing::{delete, get, post},
     Json, Router,
+};
+use aws_sdk_s3::{
+    config::{BehaviorVersion, Credentials, Region},
+    primitives::ByteStream,
+    Client as S3Client,
 };
 use rdkafka::{
     config::ClientConfig,
@@ -17,12 +22,12 @@ use serde_json::{json, Value};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use uuid::Uuid;
 
-// ── shared state ─────────────────────────────────────────────────────────────
-
 #[derive(Clone)]
 struct AppState {
     db: Arc<Session>,
     producer: FutureProducer,
+    s3: Arc<S3Client>,
+    minio_public_url: String,
 }
 
 // ── request types ─────────────────────────────────────────────────────────────
@@ -47,11 +52,18 @@ fn user_id_from_headers(headers: &HeaderMap) -> Option<String> {
         .map(String::from)
 }
 
+fn username_from_headers(headers: &HeaderMap) -> String {
+    headers
+        .get("x-username")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string()
+}
+
 fn new_timeuuid() -> Uuid {
     Uuid::now_v1(&[1, 2, 3, 4, 5, 6])
 }
 
-/// Extract an ISO-8601 timestamp from the time component of a UUIDv1 / timeuuid.
 fn timeuuid_to_iso(id: Uuid) -> String {
     if let Some(ts) = id.get_timestamp() {
         let (secs, nanos) = ts.to_unix();
@@ -68,7 +80,6 @@ fn api_err(code: StatusCode, msg: &str) -> (StatusCode, Json<Value>) {
 
 // ── Cassandra bootstrap ───────────────────────────────────────────────────────
 
-/// Retry connecting to Cassandra with exponential backoff (max 30 s).
 async fn cassandra_connect(hosts: &[&str]) -> Session {
     let mut wait = Duration::from_secs(2);
     loop {
@@ -86,7 +97,6 @@ async fn cassandra_connect(hosts: &[&str]) -> Session {
     }
 }
 
-/// Create keyspace and messages table if they do not already exist.
 async fn ensure_schema(db: &Session) -> anyhow::Result<()> {
     db.query(
         "CREATE KEYSPACE IF NOT EXISTS discord_chat \
@@ -100,9 +110,26 @@ async fn ensure_schema(db: &Session) -> anyhow::Result<()> {
             channel_id uuid, \
             message_id timeuuid, \
             author_id  uuid, \
+            username   text, \
             content    text, \
             PRIMARY KEY (channel_id, message_id) \
          ) WITH CLUSTERING ORDER BY (message_id DESC)",
+        &[],
+    )
+    .await?;
+
+    // Add username column to tables created before this migration.
+    let _ = db
+        .query("ALTER TABLE discord_chat.messages ADD username text", &[])
+        .await;
+
+    // Username lookup cache: populated on every send_message so historical
+    // messages can be resolved even if they pre-date the username column.
+    db.query(
+        "CREATE TABLE IF NOT EXISTS discord_chat.user_cache ( \
+            user_id  uuid PRIMARY KEY, \
+            username text \
+         )",
         &[],
     )
     .await?;
@@ -129,6 +156,14 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(8083);
+    let minio_url =
+        env::var("MINIO_URL").unwrap_or_else(|_| "http://minio:9000".into());
+    let minio_public_url =
+        env::var("MINIO_PUBLIC_URL").unwrap_or_else(|_| "http://localhost:9000".into());
+    let minio_access =
+        env::var("MINIO_ACCESS_KEY").unwrap_or_else(|_| "minioadmin".into());
+    let minio_secret =
+        env::var("MINIO_SECRET_KEY").unwrap_or_else(|_| "minioadmin".into());
 
     let hosts: Vec<&str> = hosts_raw.split(',').collect();
 
@@ -137,15 +172,31 @@ async fn main() -> anyhow::Result<()> {
     db.use_keyspace("discord_chat", false).await?;
     tracing::info!("Cassandra schema ready");
 
-    // Kafka producer — connection errors are logged but do not abort startup.
     let producer: FutureProducer = ClientConfig::new()
         .set("bootstrap.servers", &kafka_brokers)
         .set("message.timeout.ms", "5000")
         .create()?;
 
+    let s3_config = aws_sdk_s3::Config::builder()
+        .behavior_version(BehaviorVersion::latest())
+        .endpoint_url(&minio_url)
+        .region(Region::new("us-east-1"))
+        .credentials_provider(Credentials::new(
+            &minio_access,
+            &minio_secret,
+            None,
+            None,
+            "minio",
+        ))
+        .force_path_style(true)
+        .build();
+    let s3 = Arc::new(S3Client::from_conf(s3_config));
+
     let state = AppState {
         db: Arc::new(db),
         producer,
+        s3,
+        minio_public_url,
     };
 
     let app = Router::new()
@@ -157,6 +208,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/channels/:channel_id/messages/:message_id",
             delete(delete_message),
+        )
+        .route(
+            "/channels/:channel_id/attachments",
+            post(upload_attachment),
         )
         .with_state(state);
 
@@ -174,7 +229,6 @@ async fn health() -> Json<Value> {
     Json(json!({ "status": "ok" }))
 }
 
-/// POST /channels/:channel_id/messages  →  201 with message object
 async fn send_message(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -183,6 +237,7 @@ async fn send_message(
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
     let user_id_str = user_id_from_headers(&headers)
         .ok_or_else(|| api_err(StatusCode::UNAUTHORIZED, "unauthorized"))?;
+    let username = username_from_headers(&headers);
 
     if body.content.trim().is_empty() {
         return Err(api_err(StatusCode::BAD_REQUEST, "content is required"));
@@ -197,12 +252,14 @@ async fn send_message(
     let timeuuid = CqlTimeuuid::from(msg_uuid);
     let created_at = timeuuid_to_iso(msg_uuid);
 
+    // Store NULL when username is missing so list_messages can fall back to user_cache.
+    let username_stored: Option<&str> = if username.is_empty() { None } else { Some(&username) };
     state
         .db
         .query(
-            "INSERT INTO messages (channel_id, message_id, author_id, content) \
-             VALUES (?, ?, ?, ?)",
-            (channel_uuid, timeuuid, author_uuid, body.content.as_str()),
+            "INSERT INTO messages (channel_id, message_id, author_id, username, content) \
+             VALUES (?, ?, ?, ?, ?)",
+            (channel_uuid, timeuuid, author_uuid, username_stored, body.content.as_str()),
         )
         .await
         .map_err(|e| {
@@ -210,28 +267,42 @@ async fn send_message(
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "db error")
         })?;
 
-    // Fire-and-forget Kafka event — failure does not fail the request.
+    // Update user_cache so historical messages from this user can resolve their name.
+    if !username.is_empty() {
+        let _ = state
+            .db
+            .query(
+                "INSERT INTO user_cache (user_id, username) VALUES (?, ?)",
+                (author_uuid, username.as_str()),
+            )
+            .await;
+    }
+
     let payload = json!({
         "message_id":  msg_uuid.to_string(),
         "channel_id":  channel_id,
         "author_id":   user_id_str,
+        "username":    username,
         "content":     body.content,
         "attachments": [],
         "created_at":  created_at,
     })
     .to_string();
 
-    let record = FutureRecord::to("message-created")
-        .key(channel_id.as_str())
-        .payload(payload.as_bytes());
-
-    if let Err((e, _)) = state
-        .producer
-        .send(record, Timeout::After(Duration::from_secs(5)))
-        .await
-    {
-        tracing::warn!("Kafka publish failed: {e}");
-    }
+    let producer = state.producer.clone();
+    let payload_owned = payload.clone();
+    let channel_key = channel_id.clone();
+    tokio::spawn(async move {
+        let record = FutureRecord::to("message-created")
+            .key(channel_key.as_str())
+            .payload(payload_owned.as_bytes());
+        if let Err((e, _)) = producer
+            .send(record, Timeout::After(Duration::from_secs(5)))
+            .await
+        {
+            tracing::warn!("Kafka publish failed: {e}");
+        }
+    });
 
     Ok((
         StatusCode::CREATED,
@@ -239,17 +310,13 @@ async fn send_message(
             "message_id": msg_uuid.to_string(),
             "channel_id": channel_id,
             "author_id":  user_id_str,
+            "username":   username,
             "content":    body.content,
             "created_at": created_at,
         })),
     ))
 }
 
-/// GET /channels/:channel_id/messages?limit=50&before=<timeuuid>
-///
-/// Returns messages ordered newest-first (matches Cassandra clustering order).
-/// The frontend reverses the array for chronological display.
-/// Pagination: pass the oldest message_id as `before` to fetch older pages.
 async fn list_messages(
     State(state): State<AppState>,
     Path(channel_id): Path<String>,
@@ -259,7 +326,6 @@ async fn list_messages(
         .map_err(|_| api_err(StatusCode::BAD_REQUEST, "invalid channel_id"))?;
 
     let limit = params.limit.unwrap_or(50).clamp(1, 100);
-    // Fetch one extra to detect whether a next page exists.
     let fetch_limit = limit + 1;
 
     let qr = if let Some(ref before) = params.before {
@@ -269,7 +335,7 @@ async fn list_messages(
         state
             .db
             .query(
-                "SELECT message_id, author_id, content FROM messages \
+                "SELECT message_id, author_id, username, content FROM messages \
                  WHERE channel_id = ? AND message_id < ? LIMIT ?",
                 (channel_uuid, before_ts, fetch_limit),
             )
@@ -278,7 +344,7 @@ async fn list_messages(
         state
             .db
             .query(
-                "SELECT message_id, author_id, content FROM messages \
+                "SELECT message_id, author_id, username, content FROM messages \
                  WHERE channel_id = ? LIMIT ?",
                 (channel_uuid, fetch_limit),
             )
@@ -289,8 +355,8 @@ async fn list_messages(
         api_err(StatusCode::INTERNAL_SERVER_ERROR, "db error")
     })?;
 
-    let all: Vec<(CqlTimeuuid, Uuid, String)> = qr
-        .rows_typed::<(CqlTimeuuid, Uuid, String)>()
+    let all: Vec<(CqlTimeuuid, Uuid, Option<String>, String)> = qr
+        .rows_typed::<(CqlTimeuuid, Uuid, Option<String>, String)>()
         .map_err(|e| {
             tracing::error!("Row type mismatch: {e}");
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "parse error")
@@ -304,20 +370,52 @@ async fn list_messages(
     let has_more = all.len() as i32 > limit;
     let display = if has_more { &all[..limit as usize] } else { &all[..] };
 
-    let mut messages: Vec<Value> = Vec::with_capacity(display.len());
+    // Collect author_ids whose username is missing from the message row.
+    // These are messages inserted before the username column was added.
+    let missing_ids: Vec<Uuid> = display
+        .iter()
+        .filter(|(_, _, username, _)| username.is_none())
+        .map(|(_, author_id, _, _)| *author_id)
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
 
-    for (msg_ts, author_id, content) in display {
+    // Resolve missing usernames from the persistent user_cache.
+    let mut name_cache: HashMap<Uuid, String> = HashMap::new();
+    for author_id in missing_ids {
+        if let Ok(qr) = state
+            .db
+            .query(
+                "SELECT username FROM user_cache WHERE user_id = ?",
+                (author_id,),
+            )
+            .await
+        {
+            if let Ok(Some((name,))) = qr.maybe_first_row_typed::<(String,)>() {
+                name_cache.insert(author_id, name);
+            }
+        }
+    }
+
+    let mut messages: Vec<Value> = Vec::with_capacity(display.len());
+    for (msg_ts, author_id, username, content) in display {
         let msg_uuid = Uuid::from(*msg_ts);
+        // Treat stored empty-string the same as NULL — fall back to user_cache.
+        let resolved = username
+            .clone()
+            .filter(|s| !s.is_empty())
+            .or_else(|| name_cache.get(author_id).cloned());
+
         messages.push(json!({
             "message_id": msg_uuid.to_string(),
             "channel_id": channel_id,
             "author_id":  author_id.to_string(),
+            "username":   resolved,
             "content":    content,
             "created_at": timeuuid_to_iso(msg_uuid),
         }));
     }
 
-    // Cursor points at the oldest message in this page (last in DESC result).
     let next_cursor: Option<String> = if has_more {
         messages.last().and_then(|m| m["message_id"].as_str()).map(String::from)
     } else {
@@ -331,9 +429,6 @@ async fn list_messages(
     })))
 }
 
-/// DELETE /channels/:channel_id/messages/:message_id  →  204
-///
-/// Only the message author may delete. Returns 403 for other users, 404 if absent.
 async fn delete_message(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -351,7 +446,6 @@ async fn delete_message(
 
     let timeuuid = CqlTimeuuid::from(msg_uuid);
 
-    // Fetch the row to verify ownership before deleting.
     let qr = state
         .db
         .query(
@@ -385,4 +479,52 @@ async fn delete_message(
         })?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn upload_attachment(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(channel_id): Path<String>,
+    mut multipart: Multipart,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    user_id_from_headers(&headers)
+        .ok_or_else(|| api_err(StatusCode::UNAUTHORIZED, "unauthorized"))?;
+
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        api_err(StatusCode::BAD_REQUEST, &format!("multipart: {e}"))
+    })? {
+        if field.name() != Some("file") {
+            continue;
+        }
+
+        let filename = field
+            .file_name()
+            .map(|s| s.replace(['/', '\\', '\0'], "_"))
+            .unwrap_or_else(|| "upload".to_string());
+        let content_type = field
+            .content_type()
+            .unwrap_or("application/octet-stream")
+            .to_string();
+        let data = field.bytes().await.map_err(|e| {
+            api_err(StatusCode::BAD_REQUEST, &format!("read: {e}"))
+        })?;
+
+        let key = format!("{}/{}/{}", channel_id, Uuid::new_v4(), filename);
+
+        state
+            .s3
+            .put_object()
+            .bucket("attachments")
+            .key(&key)
+            .content_type(content_type)
+            .body(ByteStream::from(data))
+            .send()
+            .await
+            .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("s3: {e}")))?;
+
+        let url = format!("{}/attachments/{}", state.minio_public_url, key);
+        return Ok(Json(json!({ "url": url })));
+    }
+
+    Err(api_err(StatusCode::BAD_REQUEST, "no file field in request"))
 }
