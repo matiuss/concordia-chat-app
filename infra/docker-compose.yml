@@ -23,6 +23,8 @@ services:
       timeout: 5s
       retries: 10
       start_period: 15s
+    networks:
+      - concordia-data
 
   kafka:
     image: bitnamilegacy/kafka:3.8
@@ -54,6 +56,9 @@ services:
       timeout: 10s
       retries: 15
       start_period: 30s
+    networks:
+      - concordia-data
+      - concordia-services
 
   # One-shot init container: creates the three application topics once Kafka is healthy.
   # Uses the INTERNAL listener (kafka:9093) so it works entirely inside the Docker network.
@@ -71,6 +76,8 @@ services:
         kafka-topics.sh --bootstrap-server kafka:9093 --create --if-not-exists --topic message-created --partitions 1 --replication-factor 1 &&
         kafka-topics.sh --bootstrap-server kafka:9093 --create --if-not-exists --topic mention --partitions 1 --replication-factor 1 &&
         echo 'Topics created: user-registered, message-created, mention'
+    networks:
+      - concordia-data
 
   # ── Databases ─────────────────────────────────────────────────
 
@@ -96,6 +103,8 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
+    networks:
+      - concordia-data
 
   cassandra:
     image: cassandra:4
@@ -111,6 +120,8 @@ services:
       timeout: 10s
       retries: 20
       start_period: 60s
+    networks:
+      - concordia-data
 
   # One-shot init: creates the discord_chat keyspace once Cassandra is healthy.
   cassandra-init:
@@ -123,6 +134,8 @@ services:
     volumes:
       - ./cassandra/init.cql:/init.cql:ro
     entrypoint: ["cqlsh", "cassandra", "-f", "/init.cql"]
+    networks:
+      - concordia-data
 
   redis:
     image: redis:7-alpine
@@ -137,6 +150,9 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    networks:
+      - concordia-data
+      - concordia-services
 
   minio:
     image: minio/minio
@@ -157,6 +173,8 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+    networks:
+      - concordia-data
 
   # One-shot init: creates the attachments bucket once MinIO is healthy.
   minio-init:
@@ -171,10 +189,28 @@ services:
       MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD:-minioadmin}"
     entrypoint: ["/bin/sh", "-c"]
     command:
-      - "mc alias set local http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD && mc mb --ignore-existing local/attachments && echo 'Bucket attachments created.'"
+      - "mc alias set local http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD && mc mb --ignore-existing local/attachments && mc anonymous set download local/attachments && echo 'Bucket attachments ready.'"
+    networks:
+      - concordia-data
 
   # ── Application services ──────────────────────────────────────
-
+  waf:
+    image: owasp/modsecurity-crs:nginx-alpine
+    container_name: concordia-waf
+    ports:
+      - "8443:8443"
+    depends_on:
+      gateway:
+        condition: service_healthy
+    networks:
+      - concordia-public
+      - concordia-services
+    restart: unless-stopped
+    volumes:
+      - waf_logs:/var/log/modsecurity
+      - ./waf/nginx.conf:/etc/nginx/templates/nginx.conf.template
+      - ./waf/modsecurity:/etc/nginx/modsecurity:ro
+      - ./certs:/etc/nginx/certs:ro
   gateway:
     build:
       context: ..
@@ -184,9 +220,10 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
-    ports:
-      - "8080:8080"
-      - "8443:8443"
+    
+    expose:
+    - "8080"
+    - "8443"
     volumes:
       - ./certs:/certs:ro
     environment:
@@ -196,12 +233,17 @@ services:
       TLS_KEY: "/certs/key.pem"
       JWT_SECRET: "${JWT_SECRET:-changeme-32-byte-dev-secret!!!}"
       ALLOWED_ORIGINS: "http://localhost:3000,https://localhost:3000,http://localhost:3001,https://localhost:3001,app://-"
+      REDIS_ADDR: "redis:6379"
+      KAFKA_BROKERS: "kafka:9093"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 15s
+    networks:
+      - concordia-public
+      - concordia-services
 
   auth:
     build:
@@ -227,6 +269,9 @@ services:
       timeout: 5s
       retries: 10
       start_period: 60s
+    networks:
+      - concordia-services
+      - concordia-data
 
   servers:
     build:
@@ -254,6 +299,9 @@ services:
       timeout: 5s
       retries: 10
       start_period: 60s
+    networks:
+      - concordia-services
+      - concordia-data
 
   chat:
     build:
@@ -271,12 +319,19 @@ services:
       CASSANDRA_HOSTS: "cassandra:9042"
       KAFKA_BROKERS: kafka:9093
       JWT_SECRET: "${JWT_SECRET:-changeme-32-byte-dev-secret!!!}"
+      MINIO_URL: "http://minio:9000"
+      MINIO_PUBLIC_URL: "http://localhost:9000"
+      MINIO_ACCESS_KEY: "${MINIO_ROOT_USER:-minioadmin}"
+      MINIO_SECRET_KEY: "${MINIO_ROOT_PASSWORD:-minioadmin}"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8083/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 30s
+    networks:
+      - concordia-services
+      - concordia-data
 
   voice:
     build:
@@ -305,6 +360,9 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+    networks:
+      - concordia-services
+      - concordia-data
 
   tips:
     build:
@@ -335,6 +393,9 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+    networks:
+      - concordia-services
+      - concordia-data
 
   presence:
     build:
@@ -356,6 +417,9 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
+    networks:
+      - concordia-services
+      - concordia-data
 
   # ── Web App ───────────────────────────────────────────────────
 
@@ -386,6 +450,8 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    networks:
+      - concordia-public
 
 volumes:
   postgres_data:
@@ -393,3 +459,12 @@ volumes:
   redis_data:
   minio_data:
   web_app_node_modules:
+  waf_logs:
+
+networks:
+  concordia-public:
+    driver: bridge
+  concordia-services:
+    driver: bridge
+  concordia-data:
+    driver: bridge
