@@ -5,7 +5,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dist": "cd ../web-app && NEXT_PUBLIC_API_URL=http://localhost:8080 npm run build && cd ../desktop-app && electron-builder"
+    "dist": "cd ../web-app && NEXT_PUBLIC_API_URL=https://localhost:8443 npm run build && cd ../desktop-app && electron-builder"
   },
   "build": {
     "appId": "com.concordia.chat",
