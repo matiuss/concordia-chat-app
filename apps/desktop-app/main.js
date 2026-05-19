@@ -248,6 +248,16 @@ ipcMain.on('show-notification', (event, { title, body, channelUrl }) => {
   }
 });
 
+// Accept the self-signed cert for localhost only so HTTPS/WSS calls reach the gateway.
+app.on('certificate-error', (event, webContents, url, error, certificate, callback) => {
+  if (new URL(url).hostname === 'localhost') {
+    event.preventDefault();
+    callback(true);
+  } else {
+    callback(false);
+  }
+});
+
 app.on('before-quit', () => {
   isQuitting = true;
 });
