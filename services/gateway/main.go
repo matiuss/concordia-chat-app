@@ -4,9 +4,9 @@ import (
 	"context"
 	"log"
 	"net/http"
+	_ "net/http/pprof" // registers /debug/pprof handlers on http.DefaultServeMux
 	"os"
 	"strings"
-	_ "net/http/pprof" // registers /debug/pprof handlers on http.DefaultServeMux
 
 	"concordia/gateway/ws"
 )
@@ -19,10 +19,10 @@ func getenv(key, fallback string) string {
 }
 
 func main() {
-	port     := getenv("GATEWAY_PORT", "8080")
-	tlsPort  := getenv("GATEWAY_TLS_PORT", "8443")
+	port := getenv("GATEWAY_PORT", "8080")
+	tlsPort := getenv("GATEWAY_TLS_PORT", "8443")
 	certFile := getenv("TLS_CERT", "")
-	keyFile  := getenv("TLS_KEY", "")
+	keyFile := getenv("TLS_KEY", "")
 
 	cfg := configFromEnv()
 

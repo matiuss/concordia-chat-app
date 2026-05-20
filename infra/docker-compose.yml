@@ -194,16 +194,32 @@ services:
       - concordia-data
 
   # ── Application services ──────────────────────────────────────
+  # ── Reverse Proxy (single ingress, choke point) ───────────────
+  reverse-proxy:
+    image: nginx:alpine
+    container_name: concordia-rp
+    ports:
+      - "8443:8443"
+    depends_on:
+      waf:
+        condition: service_started
+    networks:
+      - concordia-public
+      - concordia-services
+    restart: unless-stopped
+    volumes:
+      - ./reverse-proxy/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+
   waf:
     image: owasp/modsecurity-crs:nginx-alpine
     container_name: concordia-waf
-    ports:
-      - "8443:8443"
+    expose:
+      - "8443"
     depends_on:
       gateway:
         condition: service_healthy
     networks:
-      - concordia-public
       - concordia-services
     restart: unless-stopped
     volumes:
@@ -242,7 +258,6 @@ services:
       retries: 5
       start_period: 15s
     networks:
-      - concordia-public
       - concordia-services
 
   auth:
@@ -429,8 +444,8 @@ services:
     container_name: web-app
     restart: unless-stopped
     depends_on:
-      gateway:
-        condition: service_healthy
+      reverse-proxy:
+        condition: service_started
     ports:
       - "3001:3000"
     volumes:
@@ -439,9 +454,13 @@ services:
       - web_app_node_modules:/app/node_modules
     environment:
       NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-https://localhost:8443}"
-      # Server-side only: Next.js Server Actions run inside Docker, so they must
-      # reach the gateway via the Docker network name, not localhost.
-      INTERNAL_API_URL: "http://gateway:8080"
+      # Server-side only: Next.js Server Actions run inside Docker. They must
+      # reach the backend through the Reverse Proxy (single ingress), never
+      # bypass it by talking to the gateway directly.
+      INTERNAL_API_URL: "https://reverse-proxy:8443"
+      # Accept the self-signed cert used for development (cert CN=localhost,
+      # not "reverse-proxy"). Dev-only — never enable in production.
+      NODE_TLS_REJECT_UNAUTHORIZED: "0"
       # Polling watcher needed for hot-reload on Docker Desktop (Mac/Windows).
       WATCHPACK_POLLING: "true"
     healthcheck:
