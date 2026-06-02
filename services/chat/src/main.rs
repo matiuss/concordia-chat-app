@@ -1,8 +1,10 @@
 use std::{collections::HashMap, env, net::SocketAddr, sync::Arc, time::Duration};
 
 use axum::{
-    extract::{Multipart, Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    extract::{Multipart, Path, Query, Request, State},
+    http::{HeaderMap, HeaderValue, StatusCode},
+    middleware::{self, Next},
+    response::Response,
     routing::{delete, get, post},
     Json, Router,
 };
@@ -28,6 +30,9 @@ struct AppState {
     producer: FutureProducer,
     s3: Arc<S3Client>,
     minio_public_url: String,
+    // Identifier of this replica, surfaced in every response so the
+    // load balancer's distribution is directly observable.
+    instance_id: Arc<String>,
 }
 
 // ── request types ─────────────────────────────────────────────────────────────
@@ -164,6 +169,13 @@ async fn main() -> anyhow::Result<()> {
         env::var("MINIO_ACCESS_KEY").unwrap_or_else(|_| "minioadmin".into());
     let minio_secret =
         env::var("MINIO_SECRET_KEY").unwrap_or_else(|_| "minioadmin".into());
+    // INSTANCE_ID is injected by docker-compose per replica (chat-1/2/3).
+    // Falls back to HOSTNAME (Docker's container hostname) so the value
+    // is still distinct when running with `--scale`.
+    let instance_id = env::var("INSTANCE_ID")
+        .or_else(|_| env::var("HOSTNAME"))
+        .unwrap_or_else(|_| "chat-unknown".into());
+    tracing::info!("Chat replica instance_id={}", instance_id);
 
     let hosts: Vec<&str> = hosts_raw.split(',').collect();
 
@@ -197,6 +209,7 @@ async fn main() -> anyhow::Result<()> {
         producer,
         s3,
         minio_public_url,
+        instance_id: Arc::new(instance_id),
     };
 
     let app = Router::new()
@@ -213,6 +226,10 @@ async fn main() -> anyhow::Result<()> {
             "/channels/:channel_id/attachments",
             post(upload_attachment),
         )
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            add_instance_id_header,
+        ))
         .with_state(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
@@ -225,8 +242,26 @@ async fn main() -> anyhow::Result<()> {
 
 // ── handlers ──────────────────────────────────────────────────────────────────
 
-async fn health() -> Json<Value> {
-    Json(json!({ "status": "ok" }))
+async fn health(State(state): State<AppState>) -> Json<Value> {
+    Json(json!({
+        "status": "ok",
+        "instance_id": state.instance_id.as_str(),
+    }))
+}
+
+// Stamps every response with X-Instance-Id so callers (and the LB
+// access log) can see which replica answered. Required by the
+// horizontal-scaling experiment's instance-identification objective.
+async fn add_instance_id_header(
+    State(state): State<AppState>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let mut resp = next.run(req).await;
+    if let Ok(value) = HeaderValue::from_str(state.instance_id.as_str()) {
+        resp.headers_mut().insert("x-instance-id", value);
+    }
+    resp
 }
 
 async fn send_message(

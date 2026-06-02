@@ -251,6 +251,10 @@ services:
       ALLOWED_ORIGINS: "http://localhost:3000,https://localhost:3000,http://localhost:3001,https://localhost:3001,app://-"
       REDIS_ADDR: "redis:6379"
       KAFKA_BROKERS: "kafka:9093"
+      # Route chat traffic through the internal load balancer instead of
+      # a single replica so the gateway always sees a stable hostname
+      # while requests fan out across chat-1/2/3.
+      CHAT_URL: "http://chat-lb:8083"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
       interval: 10s
@@ -318,18 +322,26 @@ services:
       - concordia-services
       - concordia-data
 
-  chat:
+  # ── Chat service (horizontally scaled) ────────────────────────
+  # Three identical, stateless replicas of the Chat service. State
+  # lives in Cassandra / Kafka / MinIO — the replicas themselves hold
+  # no per-user data, which is what makes horizontal scaling safe.
+  # The replicas are NOT exposed on the host: they sit behind chat-lb,
+  # which is the only thing the gateway talks to.
+  chat-1: &chat-replica
     build:
       context: ../services/chat
-    container_name: chat
+    image: concordia-chat:latest
+    container_name: chat-1
     restart: unless-stopped
     depends_on:
       cassandra:
         condition: service_healthy
-    ports:
-      - "8083:8083"
-    environment:
-      CHAT_PORT: "${CHAT_PORT:-8083}"
+    expose:
+      - "8083"
+    environment: &chat-replica-env
+      CHAT_PORT: "8083"
+      INSTANCE_ID: "chat-1"
       CASSANDRA_HOST: cassandra
       CASSANDRA_HOSTS: "cassandra:9042"
       KAFKA_BROKERS: kafka:9093
@@ -347,6 +359,50 @@ services:
     networks:
       - concordia-services
       - concordia-data
+
+  chat-2:
+    <<: *chat-replica
+    container_name: chat-2
+    environment:
+      <<: *chat-replica-env
+      INSTANCE_ID: "chat-2"
+
+  chat-3:
+    <<: *chat-replica
+    container_name: chat-3
+    environment:
+      <<: *chat-replica-env
+      INSTANCE_ID: "chat-3"
+
+  # ── Chat load balancer ────────────────────────────────────────
+  # Internal-only nginx that fans gateway traffic across the three
+  # chat replicas. Lives in concordia-services (NOT public): the
+  # security chain RP→WAF→gateway still owns ingress and JWT checks;
+  # this LB only handles already-authenticated, already-WAF-filtered
+  # traffic on the internal hop.
+  chat-lb:
+    image: nginx:alpine
+    container_name: chat-lb
+    restart: unless-stopped
+    depends_on:
+      chat-1:
+        condition: service_started
+      chat-2:
+        condition: service_started
+      chat-3:
+        condition: service_started
+    expose:
+      - "8083"
+    volumes:
+      - ./load-balancer/nginx.conf:/etc/nginx/nginx.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8083/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - concordia-services
 
   voice:
     build:
