@@ -18,7 +18,13 @@ export default function LoginPage() {
     fd.set('password', password);
     startTransition(async () => {
       const result = await loginAction(undefined, fd);
-      if (result?.error) setError(result.error);
+      if (result?.error) {
+        setError(result.error);
+      } else if (result?.tokens) {
+        localStorage.setItem('access_token', result.tokens.access_token);
+        localStorage.setItem('refresh_token', result.tokens.refresh_token);
+        window.location.href = '/';
+      }
     });
   }
 

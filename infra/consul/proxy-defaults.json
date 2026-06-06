@@ -1,0 +1,7 @@
+{
+  "Kind": "proxy-defaults",
+  "Name": "global",
+  "Config": {
+    "envoy_dns_discovery_type": "LOGICAL_DNS"
+  }
+}

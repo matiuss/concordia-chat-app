@@ -1,0 +1,16 @@
+{
+  "Kind": "service-defaults",
+  "Name": "gateway",
+  "UpstreamConfig": {
+    "Overrides": [
+      {
+        "Name": "servers",
+        "EnvoyClusterJSON": "{\"@type\":\"type.googleapis.com/envoy.config.cluster.v3.Cluster\",\"name\":\"servers\",\"type\":\"STRICT_DNS\",\"connect_timeout\":\"5s\",\"dns_lookup_family\":\"V4_ONLY\",\"load_assignment\":{\"cluster_name\":\"servers\",\"endpoints\":[{\"lb_endpoints\":[{\"endpoint\":{\"address\":{\"socket_address\":{\"address\":\"servers\",\"port_value\":21001}}}}]}]},\"transport_socket\":{\"name\":\"envoy.transport_sockets.tls\",\"typed_config\":{\"@type\":\"type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext\",\"common_tls_context\":{\"tls_params\":{\"tls_minimum_protocol_version\":\"TLSv1_2\"},\"tls_certificate_sds_secret_configs\":[{\"name\":\"spiffe://dc1.consul/ns/default/dc/dc1/svc/gateway\",\"sds_config\":{\"api_config_source\":{\"api_type\":\"GRPC\",\"transport_api_version\":\"V3\",\"grpc_services\":[{\"envoy_grpc\":{\"cluster_name\":\"local_agent\"}}],\"set_node_on_first_message_only\":true},\"resource_api_version\":\"V3\"}}],\"combined_validation_context\":{\"default_validation_context\":{\"match_typed_subject_alt_names\":[{\"san_type\":\"URI\",\"matcher\":{\"exact\":\"spiffe://dc1.consul/ns/default/dc/dc1/svc/servers\"}}]},\"validation_context_sds_secret_config\":{\"name\":\"ROOTCA\",\"sds_config\":{\"api_config_source\":{\"api_type\":\"GRPC\",\"transport_api_version\":\"V3\",\"grpc_services\":[{\"envoy_grpc\":{\"cluster_name\":\"local_agent\"}}],\"set_node_on_first_message_only\":true},\"resource_api_version\":\"V3\"}}}}}}}"
+      },
+      {
+        "Name": "chat",
+        "EnvoyClusterJSON": "{\"@type\":\"type.googleapis.com/envoy.config.cluster.v3.Cluster\",\"name\":\"chat\",\"type\":\"STRICT_DNS\",\"connect_timeout\":\"5s\",\"dns_lookup_family\":\"V4_ONLY\",\"load_assignment\":{\"cluster_name\":\"chat\",\"endpoints\":[{\"lb_endpoints\":[{\"endpoint\":{\"address\":{\"socket_address\":{\"address\":\"chat\",\"port_value\":21000}}}}]}]},\"transport_socket\":{\"name\":\"envoy.transport_sockets.tls\",\"typed_config\":{\"@type\":\"type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext\",\"common_tls_context\":{\"tls_params\":{\"tls_minimum_protocol_version\":\"TLSv1_2\"},\"tls_certificate_sds_secret_configs\":[{\"name\":\"spiffe://dc1.consul/ns/default/dc/dc1/svc/gateway\",\"sds_config\":{\"api_config_source\":{\"api_type\":\"GRPC\",\"transport_api_version\":\"V3\",\"grpc_services\":[{\"envoy_grpc\":{\"cluster_name\":\"local_agent\"}}],\"set_node_on_first_message_only\":true},\"resource_api_version\":\"V3\"}}],\"combined_validation_context\":{\"default_validation_context\":{\"match_typed_subject_alt_names\":[{\"san_type\":\"URI\",\"matcher\":{\"exact\":\"spiffe://dc1.consul/ns/default/dc/dc1/svc/chat\"}}]},\"validation_context_sds_secret_config\":{\"name\":\"ROOTCA\",\"sds_config\":{\"api_config_source\":{\"api_type\":\"GRPC\",\"transport_api_version\":\"V3\",\"grpc_services\":[{\"envoy_grpc\":{\"cluster_name\":\"local_agent\"}}],\"set_node_on_first_message_only\":true},\"resource_api_version\":\"V3\"}}}}}}}"
+      }
+    ]
+  }
+}

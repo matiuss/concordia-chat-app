@@ -43,7 +43,11 @@ export default function RegisterPage() {
     fd.set('password', form.password);
     startTransition(async () => {
       const result = await registerAction(undefined, fd);
-      if (result?.error) setServerError(result.error);
+      if (result?.error) {
+        setServerError(result.error);
+      } else {
+        window.location.href = '/login';
+      }
     });
   };
 

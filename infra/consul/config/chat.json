@@ -1,0 +1,27 @@
+{
+  "service": {
+    "id":      "chat",
+    "name":    "chat",
+    "address": "172.20.0.20",
+    "port":    8083,
+    "connect": {
+      "sidecar_service": {
+        "port": 21000,
+        "checks": [
+          {
+            "name":     "Sidecar Proxy Listening",
+            "tcp":      "chat:21000",
+            "interval": "10s",
+            "timeout":  "5s"
+          }
+        ]
+      }
+    },
+    "check": {
+      "http":     "http://chat:8083/health",
+      "interval": "10s",
+      "timeout":  "5s",
+      "deregister_critical_service_after": "10m"
+    }
+  }
+}

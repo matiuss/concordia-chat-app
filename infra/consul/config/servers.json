@@ -1,0 +1,27 @@
+{
+  "service": {
+    "id":      "servers",
+    "name":    "servers",
+    "address": "172.20.0.21",
+    "port":    8082,
+    "connect": {
+      "sidecar_service": {
+        "port": 21001,
+        "checks": [
+          {
+            "name":     "Sidecar Proxy Listening",
+            "tcp":      "servers:21001",
+            "interval": "10s",
+            "timeout":  "5s"
+          }
+        ]
+      }
+    },
+    "check": {
+      "http":     "http://servers:8082/health",
+      "interval": "10s",
+      "timeout":  "5s",
+      "deregister_critical_service_after": "10m"
+    }
+  }
+}

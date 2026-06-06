@@ -309,7 +309,13 @@ export default function ChannelSidebar() {
               <button
                 type="button"
                 title="Sign out"
-                onClick={() => { void logoutAction(); }}
+                onClick={() => {
+                  const token = localStorage.getItem('access_token') ?? '';
+                  localStorage.removeItem('access_token');
+                  localStorage.removeItem('refresh_token');
+                  void logoutAction(token);
+                  window.location.href = '/login';
+                }}
                 className="text-zinc-500 hover:text-red-400 hover:bg-[#3f4147] transition-colors cursor-pointer p-1 rounded"
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

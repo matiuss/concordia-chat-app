@@ -231,10 +231,13 @@ services:
       GATEWAY_TLS_PORT: "${GATEWAY_TLS_PORT:-8443}"
       TLS_CERT: "/certs/cert.pem"
       TLS_KEY: "/certs/key.pem"
-      JWT_SECRET: "${JWT_SECRET:-changeme-32-byte-dev-secret!!!}"
+      JWT_SECRET: "${JWT_SECRET:-changeme-32-byte-dev-secret!!!!!}"
       ALLOWED_ORIGINS: "http://localhost:3000,https://localhost:3000,http://localhost:3001,https://localhost:3001,app://-"
       REDIS_ADDR: "redis:6379"
       KAFKA_BROKERS: "kafka:9093"
+      # Upstreams routed through the Envoy sidecar (mTLS via Consul Connect)
+      CHAT_URL: "http://127.0.0.1:19101"
+      SERVERS_URL: "http://127.0.0.1:19102"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
       interval: 10s
@@ -242,8 +245,9 @@ services:
       retries: 5
       start_period: 15s
     networks:
-      - concordia-public
-      - concordia-services
+      concordia-public: {}
+      concordia-services:
+        ipv4_address: 172.20.0.22
 
   auth:
     build:
@@ -254,14 +258,14 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    ports:
-      - "8081:8081"
+    expose:
+      - "8081"
     environment:
       SERVER_PORT: "8081"
       SPRING_DATASOURCE_URL: "jdbc:postgresql://postgres:5432/auth_db"
       SPRING_DATASOURCE_USERNAME: "${POSTGRES_USER:-discord}"
       SPRING_DATASOURCE_PASSWORD: "${POSTGRES_PASSWORD:-discord}"
-      JWT_SECRET: "${JWT_SECRET:-changeme-32-byte-dev-secret!!!}"
+      JWT_SECRET: "${JWT_SECRET:-changeme-32-byte-dev-secret!!!!!}"
       SPRING_KAFKA_BOOTSTRAP_SERVERS: "kafka:9093"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8081/health || exit 1"]
@@ -282,16 +286,16 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    ports:
-      - "8082:8082"
-      - "50051:50051"
+    expose:
+      - "8082"
+      - "50051"
     environment:
       SERVER_PORT: "8082"
       GRPC_PORT: "50051"
       SPRING_DATASOURCE_URL: "jdbc:postgresql://postgres:5432/servers_db"
       SPRING_DATASOURCE_USERNAME: "${POSTGRES_USER:-discord}"
       SPRING_DATASOURCE_PASSWORD: "${POSTGRES_PASSWORD:-discord}"
-      JWT_SECRET: "${JWT_SECRET:-changeme-32-byte-dev-secret!!!}"
+      JWT_SECRET: "${JWT_SECRET:-changeme-32-byte-dev-secret!!!!!}"
       SPRING_KAFKA_BOOTSTRAP_SERVERS: "kafka:9093"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8082/health || exit 1"]
@@ -300,8 +304,9 @@ services:
       retries: 10
       start_period: 60s
     networks:
-      - concordia-services
-      - concordia-data
+      concordia-services:
+        ipv4_address: 172.20.0.21
+      concordia-data: {}
 
   chat:
     build:
@@ -311,14 +316,14 @@ services:
     depends_on:
       cassandra:
         condition: service_healthy
-    ports:
-      - "8083:8083"
+    expose:
+      - "8083"
     environment:
       CHAT_PORT: "${CHAT_PORT:-8083}"
       CASSANDRA_HOST: cassandra
       CASSANDRA_HOSTS: "cassandra:9042"
       KAFKA_BROKERS: kafka:9093
-      JWT_SECRET: "${JWT_SECRET:-changeme-32-byte-dev-secret!!!}"
+      JWT_SECRET: "${JWT_SECRET:-changeme-32-byte-dev-secret!!!!!}"
       MINIO_URL: "http://minio:9000"
       MINIO_PUBLIC_URL: "http://localhost:9000"
       MINIO_ACCESS_KEY: "${MINIO_ROOT_USER:-minioadmin}"
@@ -330,8 +335,9 @@ services:
       retries: 5
       start_period: 30s
     networks:
-      - concordia-services
-      - concordia-data
+      concordia-services:
+        ipv4_address: 172.20.0.20
+      concordia-data: {}
 
   voice:
     build:
@@ -341,12 +347,12 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    ports:
-      - "8084:8084"
+    expose:
+      - "8084"
     environment:
       VOICE_PORT: "${VOICE_PORT:-8084}"
       REDIS_ADDR: redis://redis:6379
-      JWT_SECRET: "${JWT_SECRET:-changeme-32-byte-dev-secret!!!}"
+      JWT_SECRET: "${JWT_SECRET:-changeme-32-byte-dev-secret!!!!!}"
       GRPC_ADDR: "servers:50051"
     healthcheck:
       test:
@@ -374,13 +380,13 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
-    ports:
-      - "8085:8085"
+    expose:
+      - "8085"
     environment:
       TIPS_PORT: "${TIPS_PORT:-8085}"
       DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-discord}:${POSTGRES_PASSWORD:-discord}@postgres:5432/tips_db"
       KAFKA_BROKERS: kafka:9093
-      JWT_SECRET: "${JWT_SECRET:-changeme-32-byte-dev-secret!!!}"
+      JWT_SECRET: "${JWT_SECRET:-changeme-32-byte-dev-secret!!!!!}"
     healthcheck:
       test:
         [
@@ -405,12 +411,12 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    ports:
-      - "8086:8086"
+    expose:
+      - "8086"
     environment:
       PRESENCE_PORT: "${PRESENCE_PORT:-8086}"
       REDIS_ADDR: redis:6379
-      JWT_SECRET: "${JWT_SECRET:-changeme-32-byte-dev-secret!!!}"
+      JWT_SECRET: "${JWT_SECRET:-changeme-32-byte-dev-secret!!!!!}"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8086/health || exit 1"]
       interval: 10s
@@ -420,6 +426,105 @@ services:
     networks:
       - concordia-services
       - concordia-data
+
+  # ── Service mesh ─────────────────────────────────────────────
+
+  consul-config-init:
+    image: hashicorp/consul:1.18
+    container_name: consul-config-init
+    restart: "no"
+    depends_on:
+      consul:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "/config/init-config.sh"]
+    environment:
+      CONSUL_HTTP_TOKEN: "${CONSUL_MGMT_TOKEN:-root}"
+      CONSUL_SIDECAR_TOKEN: "${CONSUL_SIDECAR_TOKEN:-sidecar-token}"
+    volumes:
+      - ./consul/proxy-defaults.json:/config/proxy-defaults.json:ro
+      - ./consul/init-config.sh:/config/init-config.sh:ro
+    networks:
+      - concordia-services
+
+  consul:
+    image: hashicorp/consul:1.18
+    container_name: consul
+    restart: unless-stopped
+    command: ["agent", "-config-dir=/consul/config"]
+    expose:
+      - "8500"
+      - "8502"
+    volumes:
+      - ./consul/config:/consul/config
+      - consul_data:/consul/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8500/v1/status/leader"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - concordia-services
+
+  chat-sidecar:
+    build: ./sidecar
+    container_name: chat-sidecar
+    restart: unless-stopped
+    command:
+      - "-sidecar-for=chat"
+      - "-http-addr=consul:8500"
+      - "-grpc-addr=consul:8502"
+      - "-admin-bind=0.0.0.0:19000"
+    environment:
+      CONSUL_HTTP_TOKEN: "${CONSUL_SIDECAR_TOKEN:-sidecar-token}"
+    network_mode: "service:chat"
+    depends_on:
+      consul:
+        condition: service_healthy
+      consul-config-init:
+        condition: service_completed_successfully
+      chat:
+        condition: service_healthy
+
+  servers-sidecar:
+    build: ./sidecar
+    container_name: servers-sidecar
+    restart: unless-stopped
+    command:
+      - "-sidecar-for=servers"
+      - "-http-addr=consul:8500"
+      - "-grpc-addr=consul:8502"
+      - "-admin-bind=0.0.0.0:19001"
+    environment:
+      CONSUL_HTTP_TOKEN: "${CONSUL_SIDECAR_TOKEN:-sidecar-token}"
+    network_mode: "service:servers"
+    depends_on:
+      consul:
+        condition: service_healthy
+      consul-config-init:
+        condition: service_completed_successfully
+      servers:
+        condition: service_healthy
+
+  gateway-sidecar:
+    build: ./sidecar
+    container_name: gateway-sidecar
+    restart: unless-stopped
+    command:
+      - "-sidecar-for=gateway"
+      - "-http-addr=consul:8500"
+      - "-grpc-addr=consul:8502"
+      - "-admin-bind=0.0.0.0:19002"
+    environment:
+      CONSUL_HTTP_TOKEN: "${CONSUL_SIDECAR_TOKEN:-sidecar-token}"
+    network_mode: "service:gateway"
+    depends_on:
+      consul:
+        condition: service_healthy
+      consul-config-init:
+        condition: service_completed_successfully
+      gateway:
+        condition: service_healthy
 
   # ── Web App ───────────────────────────────────────────────────
 
@@ -460,11 +565,15 @@ volumes:
   minio_data:
   web_app_node_modules:
   waf_logs:
+  consul_data:
 
 networks:
   concordia-public:
     driver: bridge
   concordia-services:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
   concordia-data:
     driver: bridge

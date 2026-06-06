@@ -1,0 +1,39 @@
+{
+  "service": {
+    "id":      "gateway",
+    "name":    "gateway",
+    "address": "172.20.0.22",
+    "port":    8080,
+    "connect": {
+      "sidecar_service": {
+        "port": 21002,
+        "checks": [
+          {
+            "name":     "Sidecar Proxy Listening",
+            "tcp":      "gateway:21002",
+            "interval": "10s",
+            "timeout":  "5s"
+          }
+        ],
+        "proxy": {
+          "upstreams": [
+            {
+              "destination_name": "chat",
+              "local_bind_port":  19101
+            },
+            {
+              "destination_name": "servers",
+              "local_bind_port":  19102
+            }
+          ]
+        }
+      }
+    },
+    "check": {
+      "http":     "http://gateway:8080/health",
+      "interval": "10s",
+      "timeout":  "5s",
+      "deregister_critical_service_after": "10m"
+    }
+  }
+}
