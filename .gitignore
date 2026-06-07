@@ -45,3 +45,4 @@ infra/.env
 Thumbs.db
 
 # Proto generated files are committed (regenerate via contracts/proto/generate.sh)
+.claude/settings.local.json
