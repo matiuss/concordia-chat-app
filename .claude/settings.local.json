@@ -70,7 +70,9 @@
       "PowerShell(docker exec auth *)",
       "PowerShell(docker exec postgres *)",
       "Bash(findstr -i \"CHAT_URL\\\\|SERVERS_URL\")",
-      "Bash(dir \"C:\\\\Users\\\\danie\\\\OneDrive\\\\Documentos\\\\GitHub\\\\concordia-chat-app\\\\apps\\\\web-app\\\\app\" /s /b)"
+      "Bash(dir \"C:\\\\Users\\\\danie\\\\OneDrive\\\\Documentos\\\\GitHub\\\\concordia-chat-app\\\\apps\\\\web-app\\\\app\" /s /b)",
+      "Bash(git stash *)",
+      "Bash(sh -n \"C:\\\\Users\\\\danie\\\\OneDrive\\\\Documentos\\\\GitHub\\\\concordia-chat-app\\\\infra\\\\consul\\\\init-config.sh\")"
     ]
   }
 }
