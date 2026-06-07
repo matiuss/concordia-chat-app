@@ -1,0 +1,413 @@
+# ---------------------------------------------------------------
+# Concordia – stack para Docker Swarm (docker stack deploy)
+# Basado en docker-compose.yml, adaptado para modo Swarm:
+#   - Sin depends_on (no soportado por Swarm)
+#   - Sin build (Swarm despliega imágenes ya construidas — ver `image:`)
+#   - Sin healthcheck (opcional en Swarm)
+#
+# Antes de desplegar (en PC1, desde ~/concordia-chat-app/infra), construye
+# y etiqueta cada imagen con `docker build` directo — ver el bloque de
+# comandos exactos que el asistente entregó junto con este archivo.
+#
+# Despliegue (requiere `docker swarm init` previo):
+#   docker stack deploy -c docker-compose.swarm.yml concordia
+# ---------------------------------------------------------------
+
+version: "3.8"
+
+services:
+  # ── Message broker ────────────────────────────────────────────
+
+  zookeeper:
+    image: bitnamilegacy/zookeeper:3.9
+    container_name: zookeeper
+    restart: unless-stopped
+    environment:
+      ALLOW_ANONYMOUS_LOGIN: "yes"
+    ports:
+      - "2181:2181"
+    networks:
+      - concordia-data
+
+  kafka:
+    image: bitnamilegacy/kafka:3.8
+    container_name: kafka
+    restart: unless-stopped
+    ports:
+      - "9092:9092" # EXTERNAL listener — reachable from the host at localhost:9092
+    environment:
+      KAFKA_CFG_ZOOKEEPER_CONNECT: zookeeper:2181
+      # Two listeners so both host and Docker-internal clients can reach the broker.
+      # INTERNAL (9093) is used by containers in the same Docker network.
+      # EXTERNAL (9092) is advertised to host-side clients via the published port.
+      KAFKA_CFG_LISTENERS: INTERNAL://:9093,EXTERNAL://:9092
+      KAFKA_CFG_ADVERTISED_LISTENERS: INTERNAL://kafka:9093,EXTERNAL://localhost:9092
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CFG_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+    networks:
+      - concordia-data
+      - concordia-services
+
+  # One-shot init container: creates the three application topics once Kafka is healthy.
+  # Uses the INTERNAL listener (kafka:9093) so it works entirely inside the Docker network.
+  kafka-init:
+    image: bitnamilegacy/kafka:3.8
+    container_name: kafka-init
+    restart: "no"
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - >-
+        kafka-topics.sh --bootstrap-server kafka:9093 --create --if-not-exists --topic user-registered --partitions 1 --replication-factor 1 &&
+        kafka-topics.sh --bootstrap-server kafka:9093 --create --if-not-exists --topic message-created --partitions 1 --replication-factor 1 &&
+        kafka-topics.sh --bootstrap-server kafka:9093 --create --if-not-exists --topic mention --partitions 1 --replication-factor 1 &&
+        echo 'Topics created: user-registered, message-created, mention'
+    networks:
+      - concordia-data
+
+  # ── Databases ─────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:-discord}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-discord}"
+      # discord_auth is the primary DB; auth_db / servers_db / tips_db are
+      # created by the init script below.
+      POSTGRES_DB: discord_auth
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - concordia-data
+
+  cassandra:
+    image: cassandra:4
+    container_name: cassandra
+    restart: unless-stopped
+    ports:
+      - "9042:9042"
+    volumes:
+      - cassandra_data:/var/lib/cassandra
+    networks:
+      - concordia-data
+
+  # One-shot init: creates the discord_chat keyspace once Cassandra is healthy.
+  cassandra-init:
+    image: cassandra:4
+    container_name: cassandra-init
+    restart: "no"
+    volumes:
+      - ./cassandra/init.cql:/init.cql:ro
+    entrypoint: ["cqlsh", "cassandra", "-f", "/init.cql"]
+    networks:
+      - concordia-data
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - concordia-data
+      - concordia-services
+
+  minio:
+    image: minio/minio
+    container_name: minio
+    restart: unless-stopped
+    ports:
+      - "9000:9000" # S3-compatible API
+      - "9001:9001" # Web console
+    environment:
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER:-minioadmin}"
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD:-minioadmin}"
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      - concordia-data
+
+  # One-shot init: creates the attachments bucket once MinIO is healthy.
+  minio-init:
+    image: minio/mc
+    container_name: minio-init
+    restart: "no"
+    environment:
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER:-minioadmin}"
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD:-minioadmin}"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - "mc alias set local http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD && mc mb --ignore-existing local/attachments && mc anonymous set download local/attachments && echo 'Bucket attachments ready.'"
+    networks:
+      - concordia-data
+
+  # ── Application services ──────────────────────────────────────
+  waf:
+    image: owasp/modsecurity-crs:nginx-alpine
+    container_name: concordia-waf
+    ports:
+      - "8443:8443"
+    networks:
+      - concordia-public
+      - concordia-services
+    restart: unless-stopped
+    volumes:
+      - waf_logs:/var/log/modsecurity
+      - ./waf/nginx.conf:/etc/nginx/templates/nginx.conf.template
+      - ./waf/modsecurity:/etc/nginx/modsecurity:ro
+      - ./certs:/etc/nginx/certs:ro
+
+  gateway:
+    image: concordia/gateway:latest
+    container_name: gateway
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    expose:
+      - "8443"
+    volumes:
+      - ./certs:/certs:ro
+    environment:
+      GATEWAY_PORT: "${GATEWAY_PORT:-8080}"
+      GATEWAY_TLS_PORT: "${GATEWAY_TLS_PORT:-8443}"
+      TLS_CERT: "/certs/cert.pem"
+      TLS_KEY: "/certs/key.pem"
+      JWT_SECRET: "${JWT_SECRET:-changeme-32-byte-dev-secret!!!!!}"
+      ALLOWED_ORIGINS: "http://localhost:3000,https://localhost:3000,http://localhost:3001,https://localhost:3001,app://-"
+      REDIS_ADDR: "redis:6379"
+      KAFKA_BROKERS: "kafka:9093"
+      # Upstreams routed through the Envoy sidecar (mTLS via Consul Connect)
+      CHAT_URL: "http://127.0.0.1:19101"
+      SERVERS_URL: "http://127.0.0.1:19102"
+    networks:
+      concordia-public: {}
+      concordia-services:
+        ipv4_address: 172.20.0.22
+
+  auth:
+    image: concordia/auth:latest
+    container_name: auth
+    restart: unless-stopped
+    expose:
+      - "8081"
+    environment:
+      SERVER_PORT: "8081"
+      SPRING_DATASOURCE_URL: "jdbc:postgresql://postgres:5432/auth_db"
+      SPRING_DATASOURCE_USERNAME: "${POSTGRES_USER:-discord}"
+      SPRING_DATASOURCE_PASSWORD: "${POSTGRES_PASSWORD:-discord}"
+      JWT_SECRET: "${JWT_SECRET:-changeme-32-byte-dev-secret!!!!!}"
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: "kafka:9093"
+    networks:
+      - concordia-services
+      - concordia-data
+
+  servers:
+    image: concordia/servers:latest
+    container_name: servers
+    restart: unless-stopped
+    expose:
+      - "8082"
+      - "50051"
+    environment:
+      SERVER_PORT: "8082"
+      GRPC_PORT: "50051"
+      SPRING_DATASOURCE_URL: "jdbc:postgresql://postgres:5432/servers_db"
+      SPRING_DATASOURCE_USERNAME: "${POSTGRES_USER:-discord}"
+      SPRING_DATASOURCE_PASSWORD: "${POSTGRES_PASSWORD:-discord}"
+      JWT_SECRET: "${JWT_SECRET:-changeme-32-byte-dev-secret!!!!!}"
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: "kafka:9093"
+    networks:
+      concordia-services:
+        ipv4_address: 172.20.0.21
+      concordia-data: {}
+
+  chat:
+    image: concordia/chat:latest
+    container_name: chat
+    restart: unless-stopped
+    expose:
+      - "8083"
+    environment:
+      CHAT_PORT: "${CHAT_PORT:-8083}"
+      CASSANDRA_HOST: cassandra
+      CASSANDRA_HOSTS: "cassandra:9042"
+      KAFKA_BROKERS: kafka:9093
+      JWT_SECRET: "${JWT_SECRET:-changeme-32-byte-dev-secret!!!!!}"
+      MINIO_URL: "http://minio:9000"
+      MINIO_PUBLIC_URL: "http://localhost:9000"
+      MINIO_ACCESS_KEY: "${MINIO_ROOT_USER:-minioadmin}"
+      MINIO_SECRET_KEY: "${MINIO_ROOT_PASSWORD:-minioadmin}"
+    networks:
+      concordia-services:
+        ipv4_address: 172.20.0.20
+      concordia-data: {}
+
+  voice:
+    image: concordia/voice:latest
+    container_name: voice
+    restart: unless-stopped
+    expose:
+      - "8084"
+    environment:
+      VOICE_PORT: "${VOICE_PORT:-8084}"
+      REDIS_ADDR: redis://redis:6379
+      JWT_SECRET: "${JWT_SECRET:-changeme-32-byte-dev-secret!!!!!}"
+      GRPC_ADDR: "servers:50051"
+    networks:
+      - concordia-services
+      - concordia-data
+
+  tips:
+    image: concordia/tips:latest
+    container_name: tips
+    restart: unless-stopped
+    expose:
+      - "8085"
+    environment:
+      TIPS_PORT: "${TIPS_PORT:-8085}"
+      DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-discord}:${POSTGRES_PASSWORD:-discord}@postgres:5432/tips_db"
+      KAFKA_BROKERS: kafka:9093
+      JWT_SECRET: "${JWT_SECRET:-changeme-32-byte-dev-secret!!!!!}"
+    networks:
+      - concordia-services
+      - concordia-data
+
+  presence:
+    image: concordia/presence:latest
+    container_name: presence
+    restart: unless-stopped
+    expose:
+      - "8086"
+    environment:
+      PRESENCE_PORT: "${PRESENCE_PORT:-8086}"
+      REDIS_ADDR: redis:6379
+      JWT_SECRET: "${JWT_SECRET:-changeme-32-byte-dev-secret!!!!!}"
+    networks:
+      - concordia-services
+      - concordia-data
+
+  # ── Service mesh ─────────────────────────────────────────────
+
+  consul-config-init:
+    image: hashicorp/consul:1.18
+    container_name: consul-config-init
+    restart: "no"
+    entrypoint: ["/bin/sh", "/config/init-config.sh"]
+    environment:
+      CONSUL_HTTP_TOKEN: "${CONSUL_MGMT_TOKEN:-root}"
+      CONSUL_SIDECAR_TOKEN: "${CONSUL_SIDECAR_TOKEN:-sidecar-token}"
+    volumes:
+      - ./consul/proxy-defaults.json:/config/proxy-defaults.json:ro
+      - ./consul/init-config.sh:/config/init-config.sh:ro
+    networks:
+      - concordia-services
+
+  consul:
+    image: hashicorp/consul:1.18
+    container_name: consul
+    restart: unless-stopped
+    command: ["agent", "-config-dir=/consul/config"]
+    expose:
+      - "8500"
+      - "8502"
+    volumes:
+      - ./consul/config:/consul/config
+      - consul_data:/consul/data
+    networks:
+      - concordia-services
+
+  chat-sidecar:
+    image: concordia/sidecar:latest
+    container_name: chat-sidecar
+    restart: unless-stopped
+    command:
+      - "-sidecar-for=chat"
+      - "-http-addr=consul:8500"
+      - "-grpc-addr=consul:8502"
+      - "-admin-bind=0.0.0.0:19000"
+    environment:
+      CONSUL_HTTP_TOKEN: "${CONSUL_SIDECAR_TOKEN:-sidecar-token}"
+    networks:
+      - concordia-services
+      - concordia-data
+
+  servers-sidecar:
+    image: concordia/sidecar:latest
+    container_name: servers-sidecar
+    restart: unless-stopped
+    command:
+      - "-sidecar-for=servers"
+      - "-http-addr=consul:8500"
+      - "-grpc-addr=consul:8502"
+      - "-admin-bind=0.0.0.0:19001"
+    environment:
+      CONSUL_HTTP_TOKEN: "${CONSUL_SIDECAR_TOKEN:-sidecar-token}"
+    networks:
+      - concordia-services
+      - concordia-data
+
+  gateway-sidecar:
+    image: concordia/sidecar:latest
+    container_name: gateway-sidecar
+    restart: unless-stopped
+    command:
+      - "-sidecar-for=gateway"
+      - "-http-addr=consul:8500"
+      - "-grpc-addr=consul:8502"
+      - "-admin-bind=0.0.0.0:19002"
+    environment:
+      CONSUL_HTTP_TOKEN: "${CONSUL_SIDECAR_TOKEN:-sidecar-token}"
+    networks:
+      - concordia-public
+      - concordia-services
+
+  # ── Web App ───────────────────────────────────────────────────
+
+  web-app:
+    image: concordia/web-app:latest
+    container_name: web-app
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    volumes:
+      # Bind-mount source for hot-reload; named volume keeps container node_modules intact.
+      - ../apps/web-app:/app
+      - web_app_node_modules:/app/node_modules
+    environment:
+      NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-https://localhost:8443}"
+      # Server-side only: Next.js Server Actions run inside Docker, so they must
+      # reach the gateway via the Docker network name, not localhost.
+      INTERNAL_API_URL: "http://gateway:8080"
+      # Polling watcher needed for hot-reload on Docker Desktop (Mac/Windows).
+      WATCHPACK_POLLING: "true"
+    networks:
+      - concordia-public
+
+volumes:
+  postgres_data:
+  cassandra_data:
+  redis_data:
+  minio_data:
+  web_app_node_modules:
+  waf_logs:
+  consul_data:
+
+networks:
+  concordia-public:
+    driver: bridge
+  concordia-services:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+  concordia-data:
+    driver: bridge
