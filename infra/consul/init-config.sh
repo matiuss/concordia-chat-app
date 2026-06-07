@@ -108,6 +108,46 @@ consul config write -http-addr="$CONSUL_ADDR" /config/proxy-defaults.json || {
   exit 1
 }
 
+# ── Chat service: L7 protocol + retry policy ──────────────────────────────
+# Protocol: http enables L7 routing on the chat sidecar (required for
+# service-router retries to be applied by the gateway-sidecar outbound proxy).
+echo "Writing chat service-defaults (protocol: http)..."
+cat > /tmp/chat-service-defaults.json << 'EOF'
+{
+  "Kind": "service-defaults",
+  "Name": "chat",
+  "Protocol": "http"
+}
+EOF
+consul config write -http-addr="$CONSUL_ADDR" /tmp/chat-service-defaults.json || {
+  echo "ERROR: failed to write chat service-defaults" >&2
+  exit 1
+}
+
+# Retry policy: up to 2 automatic retries on transient 502/503 responses.
+# Independent of the application-level circuit breaker, which trips on
+# timeouts (context.DeadlineExceeded) — not on 5xx status codes.
+echo "Writing chat service-router (2 retries on 502/503)..."
+cat > /tmp/chat-service-router.json << 'EOF'
+{
+  "Kind": "service-router",
+  "Name": "chat",
+  "Routes": [
+    {
+      "Destination": {
+        "Service": "chat",
+        "NumRetries": 2,
+        "RetryOnStatusCodes": [502, 503]
+      }
+    }
+  ]
+}
+EOF
+consul config write -http-addr="$CONSUL_ADDR" /tmp/chat-service-router.json || {
+  echo "ERROR: failed to write chat service-router" >&2
+  exit 1
+}
+
 echo "Writing gateway service-defaults..."
 consul config write -http-addr="$CONSUL_ADDR" /tmp/gw-defaults.json || {
   echo "ERROR: failed to write gateway service-defaults" >&2

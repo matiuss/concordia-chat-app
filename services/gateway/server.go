@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"concordia/gateway/middleware"
 	"concordia/gateway/ws"
@@ -90,6 +91,8 @@ func buildMux(cfg config, hub *ws.Hub) http.Handler {
 	tipsP     := mustProxy(cfg.TipsURL)
 	presenceP := mustProxy(cfg.PresenceURL)
 
+	chatCB := middleware.NewChatBreaker(chatP, 5, 30*time.Second, 5*time.Second)
+
 	// router dispatches authenticated requests to the correct upstream.
 	// isChatPath must be evaluated before the generic /channels prefix check.
 	router := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -100,7 +103,7 @@ func buildMux(cfg config, hub *ws.Hub) http.Handler {
 		case strings.HasPrefix(p, "/users"):
 			authP.ServeHTTP(w, r)
 		case isChatPath(p):
-			chatP.ServeHTTP(w, r)
+			chatCB.ServeHTTP(w, r)
 		case strings.HasPrefix(p, "/servers") || strings.HasPrefix(p, "/channels"):
 			serversP.ServeHTTP(w, r)
 		case strings.HasPrefix(p, "/voice"):

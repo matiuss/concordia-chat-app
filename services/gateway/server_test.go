@@ -318,7 +318,7 @@ func TestParseOrigins(t *testing.T) {
 		raw  string
 		want []string
 	}{
-		{"", []string{"http://localhost:3000"}},
+		{"", []string{"http://localhost:3000", "app://concordia", "http://localhost:8080"}},
 		{"http://a.test", []string{"http://a.test"}},
 		{"http://a.test,http://b.test", []string{"http://a.test", "http://b.test"}},
 		{" http://a.test , http://b.test ", []string{"http://a.test", "http://b.test"}},
