@@ -266,6 +266,10 @@ services:
     networks:
       - concordia-services
       - concordia-data
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == pc1
 
   servers:
     image: 10.118.170.139:5000/concordia/servers:latest
@@ -285,6 +289,10 @@ services:
     networks:
       - concordia-services
       - concordia-data
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == pc1
 
   chat:
     image: 10.118.170.139:5000/concordia/chat:latest
@@ -335,6 +343,10 @@ services:
     networks:
       - concordia-services
       - concordia-data
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == pc1
 
   presence:
     image: 10.118.170.139:5000/concordia/presence:latest
