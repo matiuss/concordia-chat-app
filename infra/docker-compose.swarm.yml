@@ -189,9 +189,8 @@ services:
       CHAT_URL: "http://127.0.0.1:19101"
       SERVERS_URL: "http://127.0.0.1:19102"
     networks:
-      concordia-public: {}
-      concordia-services:
-        ipv4_address: 172.20.0.22
+      - concordia-public
+      - concordia-services
 
   auth:
     image: 10.118.170.139:5000/concordia/auth:latest
@@ -226,9 +225,8 @@ services:
       JWT_SECRET: "${JWT_SECRET:-changeme-32-byte-dev-secret!!!!!}"
       SPRING_KAFKA_BOOTSTRAP_SERVERS: "kafka:9093"
     networks:
-      concordia-services:
-        ipv4_address: 172.20.0.21
-      concordia-data: {}
+      - concordia-services
+      - concordia-data
 
   chat:
     image: 10.118.170.139:5000/concordia/chat:latest
@@ -247,9 +245,8 @@ services:
       MINIO_ACCESS_KEY: "${MINIO_ROOT_USER:-minioadmin}"
       MINIO_SECRET_KEY: "${MINIO_ROOT_PASSWORD:-minioadmin}"
     networks:
-      concordia-services:
-        ipv4_address: 172.20.0.20
-      concordia-data: {}
+      - concordia-services
+      - concordia-data
 
   voice:
     image: 10.118.170.139:5000/concordia/voice:latest
