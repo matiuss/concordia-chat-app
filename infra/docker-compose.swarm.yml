@@ -9,6 +9,16 @@
 # y etiqueta cada imagen con `docker build` directo — ver el bloque de
 # comandos exactos que el asistente entregó junto con este archivo.
 #
+# Puertos que Swarm necesita para la red overlay — ábrelos en PC1 Y PC2
+# antes de `docker swarm init` / `docker swarm join`, o el overlay no
+# levantará y los servicios no podrán resolverse entre nodos:
+#
+#   # En PC1 y PC2 — puertos necesarios para Swarm overlay
+#   sudo ufw allow 4789/udp
+#   sudo ufw allow 7946/tcp
+#   sudo ufw allow 7946/udp
+#   sudo ufw allow 2377/tcp
+#
 # Despliegue (requiere `docker swarm init` previo):
 #   docker stack deploy -c docker-compose.swarm.yml concordia
 # ---------------------------------------------------------------
@@ -313,6 +323,10 @@ services:
     networks:
       - concordia-services
       - concordia-data
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == pc1
 
   voice:
     image: 10.118.170.139:5000/concordia/voice:latest
@@ -328,6 +342,10 @@ services:
     networks:
       - concordia-services
       - concordia-data
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == pc1
 
   tips:
     image: 10.118.170.139:5000/concordia/tips:latest
@@ -361,6 +379,10 @@ services:
     networks:
       - concordia-services
       - concordia-data
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == pc1
 
   # ── Service mesh ─────────────────────────────────────────────
 
