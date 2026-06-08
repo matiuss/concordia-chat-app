@@ -76,6 +76,7 @@ services:
       POSTGRES_USER: "${POSTGRES_USER:-discord}"
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-discord}"
       POSTGRES_HOST_AUTH_METHOD: trust
+      POSTGRES_INITDB_ARGS: "--auth-host=trust --auth-local=trust"
       # discord_auth is the primary DB; auth_db / servers_db / tips_db are
       # created by the init script below.
       POSTGRES_DB: discord_auth
