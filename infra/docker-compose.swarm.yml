@@ -28,6 +28,10 @@ services:
       - "2181:2181"
     networks:
       - concordia-data
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == pc1
 
   kafka:
     image: bitnamilegacy/kafka:3.8
@@ -49,6 +53,10 @@ services:
     networks:
       - concordia-data
       - concordia-services
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == pc1
 
   # One-shot init container: creates the three application topics once Kafka is healthy.
   # Uses the INTERNAL listener (kafka:9093) so it works entirely inside the Docker network.
@@ -65,6 +73,14 @@ services:
         echo 'Topics created: user-registered, message-created, mention'
     networks:
       - concordia-data
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == pc1
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
 
   # ── Databases ─────────────────────────────────────────────────
 
@@ -87,6 +103,10 @@ services:
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     networks:
       - concordia-data
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == pc1
 
   cassandra:
     image: cassandra:4
@@ -98,6 +118,10 @@ services:
       - cassandra_data:/var/lib/cassandra
     networks:
       - concordia-data
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == pc1
 
   # One-shot init: creates the discord_chat keyspace once Cassandra is healthy.
   cassandra-init:
@@ -109,6 +133,14 @@ services:
     entrypoint: ["cqlsh", "cassandra", "-f", "/init.cql"]
     networks:
       - concordia-data
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == pc1
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
 
   redis:
     image: redis:7-alpine
@@ -121,6 +153,10 @@ services:
     networks:
       - concordia-data
       - concordia-services
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == pc1
 
   minio:
     image: minio/minio
@@ -137,6 +173,10 @@ services:
       - minio_data:/data
     networks:
       - concordia-data
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == pc1
 
   # One-shot init: creates the attachments bucket once MinIO is healthy.
   minio-init:
@@ -151,6 +191,14 @@ services:
       - "mc alias set local http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD && mc mb --ignore-existing local/attachments && mc anonymous set download local/attachments && echo 'Bucket attachments ready.'"
     networks:
       - concordia-data
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == pc1
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
 
   # ── Application services ──────────────────────────────────────
   waf:
@@ -167,6 +215,10 @@ services:
       - ./waf/nginx.conf:/etc/nginx/templates/nginx.conf.template
       - ./waf/modsecurity:/etc/nginx/modsecurity:ro
       - ./certs:/etc/nginx/certs:ro
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == pc1
 
   gateway:
     image: 10.118.170.139:5000/concordia/gateway:latest
@@ -184,15 +236,19 @@ services:
       TLS_CERT: "/certs/cert.pem"
       TLS_KEY: "/certs/key.pem"
       JWT_SECRET: "${JWT_SECRET:-changeme-32-byte-dev-secret!!!!!}"
-      ALLOWED_ORIGINS: "http://localhost:3000,https://localhost:3000,http://localhost:3001,https://localhost:3001,app://-"
+      ALLOWED_ORIGINS: "http://localhost:3000,https://localhost:3000,http://localhost:3001,https://localhost:3001,http://10.118.170.139:3001,app://-"
       REDIS_ADDR: "redis:6379"
       KAFKA_BROKERS: "kafka:9093"
-      # Upstreams routed through the Envoy sidecar (mTLS via Consul Connect)
-      CHAT_URL: "http://127.0.0.1:19101"
-      SERVERS_URL: "http://127.0.0.1:19102"
+      # Direct service-to-service routing (no sidecar — mesh removed for Swarm compat)
+      CHAT_URL: "http://chat:8083"
+      SERVERS_URL: "http://servers:8082"
     networks:
       - concordia-public
       - concordia-services
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == pc1
 
   auth:
     image: 10.118.170.139:5000/concordia/auth:latest
@@ -243,7 +299,7 @@ services:
       KAFKA_BROKERS: kafka:9093
       JWT_SECRET: "${JWT_SECRET:-changeme-32-byte-dev-secret!!!!!}"
       MINIO_URL: "http://minio:9000"
-      MINIO_PUBLIC_URL: "http://localhost:9000"
+      MINIO_PUBLIC_URL: "http://10.118.170.139:9000"
       MINIO_ACCESS_KEY: "${MINIO_ROOT_USER:-minioadmin}"
       MINIO_SECRET_KEY: "${MINIO_ROOT_PASSWORD:-minioadmin}"
     networks:
@@ -309,6 +365,14 @@ services:
       - ./consul/init-config.sh:/config/init-config.sh:ro
     networks:
       - concordia-services
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == pc1
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
 
   consul:
     image: hashicorp/consul:1.18
@@ -323,6 +387,10 @@ services:
       - consul_data:/consul/data
     networks:
       - concordia-services
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == pc1
 
   chat-sidecar:
     image: concordia/sidecar:latest
@@ -382,7 +450,7 @@ services:
       - ../apps/web-app:/app
       - web_app_node_modules:/app/node_modules
     environment:
-      NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-https://localhost:8443}"
+      NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-https://10.118.170.139:8443}"
       # Server-side only: Next.js Server Actions run inside Docker, so they must
       # reach the gateway via the Docker network name, not localhost.
       INTERNAL_API_URL: "http://gateway:8080"
@@ -390,6 +458,10 @@ services:
       WATCHPACK_POLLING: "true"
     networks:
       - concordia-public
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == pc1
 
 volumes:
   postgres_data:
