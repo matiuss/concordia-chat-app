@@ -403,11 +403,8 @@ volumes:
 
 networks:
   concordia-public:
-    driver: bridge
+    driver: overlay
   concordia-services:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/16
+    driver: overlay
   concordia-data:
-    driver: bridge
+    driver: overlay
