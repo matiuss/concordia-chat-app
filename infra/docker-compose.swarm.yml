@@ -167,7 +167,7 @@ services:
       - ./certs:/etc/nginx/certs:ro
 
   gateway:
-    image: concordia/gateway:latest
+    image: 10.118.170.139:5000/concordia/gateway:latest
     container_name: gateway
     restart: unless-stopped
     ports:
@@ -194,7 +194,7 @@ services:
         ipv4_address: 172.20.0.22
 
   auth:
-    image: concordia/auth:latest
+    image: 10.118.170.139:5000/concordia/auth:latest
     container_name: auth
     restart: unless-stopped
     expose:
@@ -211,7 +211,7 @@ services:
       - concordia-data
 
   servers:
-    image: concordia/servers:latest
+    image: 10.118.170.139:5000/concordia/servers:latest
     container_name: servers
     restart: unless-stopped
     expose:
@@ -231,7 +231,7 @@ services:
       concordia-data: {}
 
   chat:
-    image: concordia/chat:latest
+    image: 10.118.170.139:5000/concordia/chat:latest
     container_name: chat
     restart: unless-stopped
     expose:
@@ -252,7 +252,7 @@ services:
       concordia-data: {}
 
   voice:
-    image: concordia/voice:latest
+    image: 10.118.170.139:5000/concordia/voice:latest
     container_name: voice
     restart: unless-stopped
     expose:
@@ -267,7 +267,7 @@ services:
       - concordia-data
 
   tips:
-    image: concordia/tips:latest
+    image: 10.118.170.139:5000/concordia/tips:latest
     container_name: tips
     restart: unless-stopped
     expose:
@@ -282,7 +282,7 @@ services:
       - concordia-data
 
   presence:
-    image: concordia/presence:latest
+    image: 10.118.170.139:5000/concordia/presence:latest
     container_name: presence
     restart: unless-stopped
     expose:
@@ -373,7 +373,7 @@ services:
   # ── Web App ───────────────────────────────────────────────────
 
   web-app:
-    image: concordia/web-app:latest
+    image: 10.118.170.139:5000/concordia/web-app:latest
     container_name: web-app
     restart: unless-stopped
     ports:
