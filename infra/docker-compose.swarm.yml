@@ -231,7 +231,7 @@ services:
           - node.hostname == pc1
 
   gateway:
-    image: 10.118.170.139:5000/concordia/gateway:latest
+    image: 10.118.170.130:5000/concordia/gateway:latest
     container_name: gateway
     restart: unless-stopped
     ports:
@@ -261,7 +261,7 @@ services:
           - node.hostname == pc1
 
   auth:
-    image: 10.118.170.139:5000/concordia/auth:latest
+    image: 10.118.170.130:5000/concordia/auth:latest
     container_name: auth
     restart: unless-stopped
     expose:
@@ -282,7 +282,7 @@ services:
           - node.hostname == pc1
 
   servers:
-    image: 10.118.170.139:5000/concordia/servers:latest
+    image: 10.118.170.130:5000/concordia/servers:latest
     container_name: servers
     restart: unless-stopped
     expose:
@@ -305,7 +305,7 @@ services:
           - node.hostname == pc1
 
   chat:
-    image: 10.118.170.139:5000/concordia/chat:latest
+    image: 10.118.170.130:5000/concordia/chat:latest
     container_name: chat
     restart: unless-stopped
     expose:
@@ -329,7 +329,7 @@ services:
           - node.hostname == pc1
 
   voice:
-    image: 10.118.170.139:5000/concordia/voice:latest
+    image: 10.118.170.130:5000/concordia/voice:latest
     container_name: voice
     restart: unless-stopped
     expose:
@@ -348,7 +348,7 @@ services:
           - node.hostname == pc1
 
   tips:
-    image: 10.118.170.139:5000/concordia/tips:latest
+    image: 10.118.170.130:5000/concordia/tips:latest
     container_name: tips
     restart: unless-stopped
     expose:
@@ -367,7 +367,7 @@ services:
           - node.hostname == pc1
 
   presence:
-    image: 10.118.170.139:5000/concordia/presence:latest
+    image: 10.118.170.130:5000/concordia/presence:latest
     container_name: presence
     restart: unless-stopped
     expose:
@@ -474,7 +474,7 @@ services:
   # ── Web App ───────────────────────────────────────────────────
 
   web-app:
-    image: 10.118.170.139:5000/concordia/web-app:latest
+    image: 10.118.170.130:5000/concordia/web-app:latest
     container_name: web-app
     restart: unless-stopped
     ports:
