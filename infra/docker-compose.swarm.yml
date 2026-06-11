@@ -231,7 +231,7 @@ services:
           - node.hostname == pc1
 
   gateway:
-    image: 10.118.170.130:5000/concordia/gateway:latest
+    image: 10.202.106.129:5000/concordia/gateway:latest
     container_name: gateway
     restart: unless-stopped
     ports:
@@ -246,7 +246,7 @@ services:
       TLS_CERT: "/certs/cert.pem"
       TLS_KEY: "/certs/key.pem"
       JWT_SECRET: "${JWT_SECRET:-changeme-32-byte-dev-secret!!!!!}"
-      ALLOWED_ORIGINS: "http://localhost:3000,https://localhost:3000,http://localhost:3001,https://localhost:3001,http://10.118.170.130:3001,app://-"
+      ALLOWED_ORIGINS: "http://localhost:3000,https://localhost:3000,http://localhost:3001,https://localhost:3001,http://10.202.106.129:3001,app://-"
       REDIS_ADDR: "redis:6379"
       KAFKA_BROKERS: "kafka:9093"
       # Direct service-to-service routing (no sidecar — mesh removed for Swarm compat)
@@ -261,7 +261,7 @@ services:
           - node.hostname == pc1
 
   auth:
-    image: 10.118.170.130:5000/concordia/auth:latest
+    image: 10.202.106.129:5000/concordia/auth:latest
     container_name: auth
     restart: unless-stopped
     expose:
@@ -282,7 +282,7 @@ services:
           - node.hostname == pc1
 
   servers:
-    image: 10.118.170.130:5000/concordia/servers:latest
+    image: 10.202.106.129:5000/concordia/servers:latest
     container_name: servers
     restart: unless-stopped
     expose:
@@ -305,7 +305,7 @@ services:
           - node.hostname == pc1
 
   chat:
-    image: 10.118.170.130:5000/concordia/chat:latest
+    image: 10.202.106.129:5000/concordia/chat:latest
     container_name: chat
     restart: unless-stopped
     expose:
@@ -317,7 +317,7 @@ services:
       KAFKA_BROKERS: kafka:9093
       JWT_SECRET: "${JWT_SECRET:-changeme-32-byte-dev-secret!!!!!}"
       MINIO_URL: "http://minio:9000"
-      MINIO_PUBLIC_URL: "http://10.118.170.130:9000"
+      MINIO_PUBLIC_URL: "http://10.202.106.129:9000"
       MINIO_ACCESS_KEY: "${MINIO_ROOT_USER:-minioadmin}"
       MINIO_SECRET_KEY: "${MINIO_ROOT_PASSWORD:-minioadmin}"
     networks:
@@ -329,7 +329,7 @@ services:
           - node.hostname == pc1
 
   voice:
-    image: 10.118.170.130:5000/concordia/voice:latest
+    image: 10.202.106.129:5000/concordia/voice:latest
     container_name: voice
     restart: unless-stopped
     expose:
@@ -348,7 +348,7 @@ services:
           - node.hostname == pc1
 
   tips:
-    image: 10.118.170.130:5000/concordia/tips:latest
+    image: 10.202.106.129:5000/concordia/tips:latest
     container_name: tips
     restart: unless-stopped
     expose:
@@ -367,7 +367,7 @@ services:
           - node.hostname == pc1
 
   presence:
-    image: 10.118.170.130:5000/concordia/presence:latest
+    image: 10.202.106.129:5000/concordia/presence:latest
     container_name: presence
     restart: unless-stopped
     expose:
@@ -474,7 +474,7 @@ services:
   # ── Web App ───────────────────────────────────────────────────
 
   web-app:
-    image: 10.118.170.130:5000/concordia/web-app:latest
+    image: 10.202.106.129:5000/concordia/web-app:latest
     container_name: web-app
     restart: unless-stopped
     ports:
@@ -484,7 +484,7 @@ services:
       - ../apps/web-app:/app
       - web_app_node_modules:/app/node_modules
     environment:
-      NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-https://10.118.170.130:8443}"
+      NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-https://10.202.106.129:8443}"
       # Server-side only: Next.js Server Actions run inside Docker, so they must
       # reach the gateway via the Docker network name, not localhost.
       INTERNAL_API_URL: "http://gateway:8080"
